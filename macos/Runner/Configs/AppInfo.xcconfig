@@ -5,10 +5,16 @@
 // 'flutter create' template.
 
 // The application's name. By default this is also the title of the Flutter window.
-PRODUCT_NAME = yuwen
+PRODUCT_NAME = Runner
 
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = com.example.yuwen
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2025 com.example. All rights reserved.
+
+MACOSX_DEPLOYMENT_TARGET = 10.15
+PRODUCT_BUNDLE_NAME = Runner
+PRODUCT_BUNDLE_PACKAGE_TYPE = APPL
+DEVELOPMENT_TEAM = 
+PROVISIONING_PROFILE_SPECIFIER =
