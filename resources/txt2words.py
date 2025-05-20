@@ -149,17 +149,27 @@ def parse_keben():
         jieba.load_userdict(user_words)
     jieba.del_word("匍匐前进")
     # 遍历每个txt文件
+    words_of_level = {}
+    chars_of_level = {}
     for txt_file in txt_files:
         print(f'Processing {txt_file}...')
         
         # 读取文件内容
         with open(txt_file, 'r', encoding='utf-8') as f:
             text = f.read()
+        level = txt_file.split('/')[-1].split('.')[0]
+
         # 只保留汉字和标点符号
         text = re.sub(r'[^\u4e00-\u9fff]', '', text)
         text = text.replace('\n', '')
         chars = set(text)
-        all_chars.update(chars)
+        for char in chars:
+            if char not in all_chars:
+                all_chars.add(char)
+                if level not in chars_of_level:
+                    chars_of_level[level] = set()
+                chars_of_level[level].add(char)
+
         # 使用jieba进行分词
         words = jieba.cut(text)
         words = list(words)
@@ -168,8 +178,14 @@ def parse_keben():
             f.write(' '.join(words))
         
         # 将词语添加到集合中
-        all_words.update(words)
-    return all_words,all_chars
+        for word in words:
+            if word not in all_words:
+                all_words.add(word)
+                if level not in words_of_level:
+                    words_of_level[level] = set()
+                words_of_level[level].add(word)
+
+    return words_of_level,chars_of_level
 
 # 读取常用成语
 def parse_chengyu300():
@@ -190,49 +206,54 @@ if __name__ == '__main__':
     chengyu = parse_chengyu()
 
     # 解析课本, 得到课本中所有的词语和字符
-    words,chars = parse_keben()
+    words_of_level,chars_of_level = parse_keben()
     
     # 解析成语3000
     chengyu300 = parse_chengyu300()
 
-    all_words = words | chengyu300
-
     out_words = {}
-    for word in sorted(all_words):
-        if word in chengyu:
-            out_words[word] = {'pinyin': chengyu[word]['pinyin'], 'explanation': chengyu[word]['explanation'], "chengyu": True}
-            print(word," ", chengyu[word]['pinyin'], " ", chengyu[word]['explanation'])
-        elif word in cidian:
-            out_words[word] = {'pinyin': cidian[word]['pinyin'], 'explanation': cidian[word]['explanation'], "chengyu": False}
-            print(word," ", cidian[word]['pinyin'], " ", cidian[word]['explanation'])
-        elif len(word)>2:
-            words1 = jieba.lcut(word)
-            for word1 in words1:
-                if word1 in cidian:
-                    out_words[word] = {'pinyin': cidian[word1]['pinyin'], 'explanation': cidian[word1]['explanation'], "chengyu": False}
-                    print(word," ", cidian[word1]['pinyin'], " ", cidian[word1]['explanation'])
-                    break
-    for char in sorted(chars):
-        has_word = False
-        for word in out_words:
-            if char in word:
-                has_word = True
-                break
-                # print(char," ------ ", word)
-        if not has_word:
-            for word in cidian:
-                if word.startswith(char):
-                    out_words[word] = {'pinyin': cidian[word]['pinyin'], 'explanation': cidian[word]['explanation'], "chengyu": False}
-                    print(word," ", cidian[word]['pinyin'], " ", cidian[word]['explanation'])
-                    has_word = True
-                    break
-        if not has_word:
-            for word in cidian:
-                if char in word:
-                    out_words[word] = {'pinyin': cidian[word]['pinyin'], 'explanation': cidian[word]['explanation'], "chengyu": False}
-                    print(word," ", cidian[word]['pinyin'], " ", cidian[word]['explanation'])
-                    has_word = True
-                    break
+    for level, words in sorted(words_of_level.items()):
+        for word in words:
+            if word in chengyu:
+                out_words[word] = {'pinyin': chengyu[word]['pinyin'], 'explanation': chengyu[word]['explanation'], "chengyu": True, "from": level}
+                print(word," ", chengyu[word]['pinyin'], " ", chengyu[word]['explanation'], " ", level)
+            elif word in cidian:
+                out_words[word] = {'pinyin': cidian[word]['pinyin'], 'explanation': cidian[word]['explanation'], "chengyu": False, "from": level}
+                print(word," ", cidian[word]['pinyin'], " ", cidian[word]['explanation'], " ", level)
+            elif len(word)>2:
+                words1 = jieba.lcut(word)
+                for word1 in words1:
+                    if word1 in cidian:
+                        out_words[word] = {'pinyin': cidian[word1]['pinyin'], 'explanation': cidian[word1]['explanation'], "chengyu": False, "from": level}
+                        print(word," ", cidian[word1]['pinyin'], " ", cidian[word1]['explanation'], " ", level)
+                        break
+    # for level , chars in sorted(chars_of_level.items()):
+    #     for char in chars:
+    #         has_word = False
+    #         for word in out_words:
+    #             if char in word:
+    #                 has_word = True
+    #                 break
+    #                 # print(char," ------ ", word)
+    #         if not has_word:
+    #             for word in cidian:
+    #                 if word.startswith(char):
+    #                     out_words[word] = {'pinyin': cidian[word]['pinyin'], 'explanation': cidian[word]['explanation'], "chengyu": False, "from": level}
+    #                     print(word," ", cidian[word]['pinyin'], " ", cidian[word]['explanation'], " ", level)
+    #                     has_word = True
+    #                     break
+            # if not has_word:
+            #     for word in cidian:
+            #         if char in word:
+            #             out_words[word] = {'pinyin': cidian[word]['pinyin'], 'explanation': cidian[word]['explanation'], "chengyu": False, "from": level}
+            #             print(word," ", cidian[word]['pinyin'], " ", cidian[word]['explanation'], " ", level)
+            #             has_word = True
+            #             break
+    for word in chengyu300:
+        if word not in out_words:
+            if word in chengyu:
+                out_words[word] = {'pinyin': chengyu[word]['pinyin'], 'explanation': chengyu[word]['explanation'], "chengyu": True, "from": "成语3000"}
+                print(word," ", chengyu[word]['pinyin'], " ", chengyu[word]['explanation'], " ", "成语3000")
     # 将out_words写入all_words.json
     with open('all_words.json', 'w', encoding='utf-8') as f:
         json.dump(out_words, f, ensure_ascii=False)
