@@ -5,6 +5,7 @@ import re
 import jieba
 import json
 import re
+import unicodedata
 
 def split_pinyin(pinyin):
     """
@@ -26,14 +27,14 @@ def split_pinyin(pinyin):
 
     # 合法拼音声母（包括空声母）
     initials = (
-        'b|p|m|f|d|t|n|l|g|k|h|j|q|x|zh|ch|sh|r|z|c|s|y|w|'
+        'b|p|m|f|d|t|n|l|g|k|h|j|q|x|zh|ch|sh|r|z|c|s|y|w'
     ).split('|')
 
     # 合法拼音韵母（涵盖常见韵母，支持带声调和无声调）
     finals = (
-        'a|o|e|i|u|ü|ai|ei|ui|ao|ou|iu|ie|ue|er|an|en|in|ang|eng|ing|ong|un|ün|'
+        'a|o|e|i|u|ü|ai|ei|ui|ao|ou|iu|ie|üe|ue|er|an|en|in|ang|eng|ing|ong|un|ün|'
         'ia|ian|iang|iong|iao|'
-        'ua|uai|uan|uang|uo|'
+        'ua|uai|uan|uang|uo|r'
     ).split('|')
 
     # 按长到短排序
@@ -87,66 +88,31 @@ def split_pinyin(pinyin):
                 pinyin_list.append(sub_part)
     return pinyin_list
 
-def process_special_chars(text):
-    """
-    将文本中的全角字符（字母、数字）转换为半角字符。
-    同时将拉丁文小写草书字母和其他特殊拉丁字母转换为对应的ASCII字母。
-    """
-    # 第一步：转换全角字符
-    trans_dict1 = str.maketrans(
-        'ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ０１２３４５６７８９',
-        'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-    )
-    
-    # 第二步：转换拉丁文小写草书字母
-    trans_dict2 = str.maketrans(
-        '𝓪𝓫𝓬𝓭𝓮𝓯𝓰𝓱𝓲𝓳𝓴𝓵𝓶𝓷𝓸𝓹𝓺𝓻𝓼𝓽𝓾𝓿𝔀𝔁𝔂𝔃',
-        'abcdefghijklmnopqrstuvwxyz'
-    )
-    
-    # 第三步：转换其他特殊拉丁字母
-    special_chars = 'ɡɢʛɕʗɖɗɘəɚɛɜɝɞɟɠɡɢɣɤɥɦɧɨɩɪɫɬɭɮɯɰɱɲɳɴɵɶɷɸɹɺɻɼɽɾɿʀʁʂʃʄʅʆʇʈʉʊʋʌʍʎʏʐʑʒʓʔʕʖʗʘʙʚʛʜʝʞʟʠʡʢʣʤʥʦʧʨʩʪʫ'
-    normal_chars = 'gggccdddeeeeeeefggghhiiilllllmmmmnnnooopprrrrrrsssttuuvvwwyyzzzqhhkkllqqqzzzzzzzzzzzzzzzzzz'
-    
-    trans_dict3 = str.maketrans(special_chars, normal_chars)
-    
-    # 第四步：转换上标数字
-    trans_dict4 = str.maketrans(
-        '⁰¹²³⁴⁵⁶⁷⁸⁹',
-        '0123456789'
-    )
-    
-    # 执行转换
-    text = text.translate(trans_dict1)
-    text = text.translate(trans_dict2)
-    text = text.translate(trans_dict3)
-    text = text.translate(trans_dict4)
-    
-    # 全角空格 (U+3000) 转换为半角空格 (U+0020)
-    text = text.replace('　', ' ')
-    
-    return text
-
 # 解析现代汉语词典, 得到每个词，以及对应的拼音和释义
 def parse_cidian():
     # 读取词典文件
     with open('XDHYCD7th.txt', 'r', encoding='utf-8') as f:
         content = f.read()
-    content = process_special_chars(content)
+    content = content.replace('\u0251', 'a')
+    content = content.replace('\u0261', 'g')
+    content = content.replace('－', ' ')
+    content = content.replace('’', ' ')
+    content = content.replace('•', ' ')
+    content = unicodedata.normalize('NFC', content)
     # 使用正则表达式匹配词条
     # 词条格式为：【词】拼音 释义
-    pattern = r'【(.*?)】\s*\d*\s*([a-zA-Zāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ•’]+)\s*(.*)'
+    pattern = r'【(.*?)】\s*\d*\s*([a-zA-Zāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ̀ ]+)\s*(.*)'
     entries = re.findall(pattern, content)
     
     # 存储词条信息
     dictionary = {}
     for word, pinyin,defs in entries:
+        if word.endswith('（儿）'):
+            word = word[:-3]
         if len(word) > 1:
-            if word == "龙腾虎跃":
-                print(pinyin)
             pinyin_list = split_pinyin(pinyin)
-            if len(word) != len(pinyin_list):
-                print(word, pinyin, pinyin_list, defs)
+            if pinyin_list[-1] == "r" and  not word.endswith("儿"):
+                pinyin_list = pinyin_list[:-1]
             dictionary[word] = {'pinyin': pinyin_list, 'explanation': defs}
     
     return dictionary
@@ -215,8 +181,8 @@ if __name__ == '__main__':
 
     all_words = words | chengyu300
 
-    # for word in sorted(all_words):
-    #     if word in cidian:
-    #         print(word," ", cidian[word]['pinyin'], " ", cidian[word]['explanation'])
-    #     elif word in chengyu:
-    #         print(word," ", chengyu[word]['pinyin'], " ", chengyu[word]['explanation'])
+    for word in sorted(all_words):
+        if word in cidian:
+            print(word," ", cidian[word]['pinyin'], " ", cidian[word]['explanation'])
+        elif word in chengyu:
+            print(word," ", chengyu[word]['pinyin'], " ", chengyu[word]['explanation'])
