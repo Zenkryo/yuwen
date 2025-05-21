@@ -175,30 +175,17 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   /// 
   /// [direction] 方向：1表示向下切换，-1表示向上切换
   /// 
-  /// 实现策略：
-  /// 1. 先更新来源显示（立即刷新UI）
-  /// 2. 然后在下一个微任务中更新词语列表和当前词语
-  /// 这种方式确保用户能够立即看到来源变化，然后才看到词语变化
   void _changeFrom(int direction) {
-    // 验证数据有效性
     if (_fromList.isEmpty || _currentFrom == null) return;
+    int newIndex = 0;
+    // 如果当前来源不在来源列表中，则切换到第一个来源
+    if (!_fromList.contains(_currentFrom!)) {
+      newIndex = 0;
+    }else{
+      final currentIndex = _fromList.indexOf(_currentFrom!);
 
-    // 保存当前来源的最后浏览位置
-    _fromLastIndex[_currentFrom!] = _currentIndex;
-
-    // 计算新来源的索引
-    final currentIndex = _fromList.indexOf(_currentFrom!);
-    if (currentIndex == -1) return;  // 当前来源不在列表中，退出
-
-    // 循环计算新索引（支持从列表头跳到尾或从尾跳到头）
-    int newIndex = (currentIndex + direction + _fromList.length) % _fromList.length;
-
-    // 处理收藏为空的特殊情况
-    if (_fromList[newIndex] == '收藏' && _savedWords.isEmpty) {
-      // 如果收藏为空，则跳过收藏来源
-      while (_fromList[newIndex] == '收藏') {
-        newIndex = (newIndex + direction + _fromList.length) % _fromList.length;
-      }
+      // 循环计算新索引（支持从列表头跳到尾或从尾跳到头）
+      newIndex = (currentIndex + direction + _fromList.length) % _fromList.length;
     }
 
     // 获取新来源名称
@@ -321,6 +308,32 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
     }
   }
 
+  void _toggleWordCollection() {
+    if (_currentWord == null) return;
+    
+    setState(() {
+      if (_savedWords.containsKey(_currentWord)) {
+        _savedWords.remove(_currentWord);
+        // 如果收藏为空，从来源列表中移除收藏选项
+        if (_savedWords.isEmpty && _fromList.contains('收藏')) {
+          _fromList.remove('收藏');
+          // // 如果当前正在显示收藏，切换到其他来源
+          // if (_currentFrom == '收藏') {
+          //   _currentFrom = _fromList.first;
+          //   _updateWordListForCurrentFrom();
+          // }
+        }
+      } else {
+        _savedWords[_currentWord!] = _words![_currentWord];
+        // 如果是第一个收藏的词语，添加收藏到来源列表
+        if (_savedWords.length == 1 && !_fromList.contains('收藏')) {
+          _fromList.add('收藏');
+        }
+      }
+    });
+    _saveState();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -351,6 +364,8 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                 _changeFrom(-1);
               } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
                 _changeFrom(1);
+              } else if (event.logicalKey == LogicalKeyboardKey.enter) {
+                _toggleWordCollection();
               }
             }
           },
@@ -463,6 +478,7 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
             const Text('X键：显示/隐藏解释', style: TextStyle(color: Colors.grey)),
             const Text('←→键：上一个/下一个', style: TextStyle(color: Colors.grey)),
             const Text('↑↓键：切换年级', style: TextStyle(color: Colors.grey)),
+            const Text('回车键：收藏/取消收藏', style: TextStyle(color: Colors.grey)),
           ],
         ),
       ),
