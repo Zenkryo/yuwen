@@ -6,6 +6,10 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'dart:async';
 import 'package:window_manager/window_manager.dart';
+import 'dart:math';
+import 'package:printing/printing.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,7 +53,9 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   Map<String, dynamic> _savedWords = {};
   String? _currentWord; // 当前显示的词语
   bool _showPinyin = false;
+  bool _keepPinyin = false; // 保持显示拼音的状态
   bool _showExplanation = false;
+  bool _keepExplanation = false; // 保持显示解释的状态
   bool _isInputMode = false;
   String _inputPinyin = '';
   int _currentInputIndex = 0; // 当前输入位置
@@ -60,12 +66,12 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   List<String> _currentWordList = [];
   final Map<String, int> _fromLastIndex = {}; // 记录每个来源的最后序号
   final FlutterTts _flutterTts = FlutterTts();
-  Timer? _keyRepeatTimer; // 添加定时器用于处理按键重复
-  bool _isBackspacePressed = false; // 记录回退键状态
-  bool _isLeftArrowPressed = false; // 记录左方向键状态
-  bool _isRightArrowPressed = false; // 记录右方向键状态
-  bool _isUpArrowPressed = false; // 记录上方向键状态
-  bool _isDownArrowPressed = false; // 记录下方向键状态
+
+  // 出题模式相关状态
+  bool _isQuizMode = false; // 是否处于出题模式
+  List<String> _quizWords = []; // 出题模式的词语列表
+  bool _showAllAnswers = false; // 是否显示所有答案
+  int _totalQuestions = 30; // 总题目数
 
   @override
   void initState() {
@@ -76,7 +82,6 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
 
   @override
   void dispose() {
-    _keyRepeatTimer?.cancel();
     _flutterTts.stop();
     _focusNode.dispose();
     super.dispose();
@@ -236,6 +241,12 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
     // 这样用户可以立即看到来源已经切换
     setState(() {
       _currentFrom = newFrom;
+      if (!_keepPinyin) {
+        _showPinyin = false;
+      }
+      if (!_keepExplanation) {
+        _showExplanation = false;
+      }
     });
 
     // 第二阶段：使用延迟确保UI先更新来源显示
@@ -323,8 +334,12 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
       _currentIndex = (_currentIndex + direction + _currentWordList.length) %
           _currentWordList.length;
       _currentWord = _currentWordList[_currentIndex];
-      _showPinyin = false;
-      _showExplanation = false;
+      if (!_keepPinyin) {
+        _showPinyin = false;
+      }
+      if (!_keepExplanation) {
+        _showExplanation = false;
+      }
     });
     // 保存当前来源的序号
     if (_currentFrom != null) {
@@ -407,27 +422,127 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
         ' ' * (fullPinyin.length - _currentInputIndex);
   }
 
-  // 处理按键重复
-  void _startKeyRepeat(Function() action) {
-    // 立即执行一次
-    action();
+  // 开始出题模式
+  void _startQuizMode() {
+    if (_currentWordList.isEmpty) return;
 
-    // 设置定时器，每100毫秒重复执行
-    _keyRepeatTimer =
-        Timer.periodic(const Duration(milliseconds: 100), (timer) {
-      action();
+    // 随机选择30个词语
+    final random = Random();
+    final words = List<String>.from(_currentWordList);
+    words.shuffle(random);
+    final selectedWords = words.take(_totalQuestions).toList();
+
+    setState(() {
+      _isQuizMode = true;
+      _quizWords = selectedWords;
+      _showAllAnswers = false;
     });
   }
 
-  // 停止按键重复
-  void _stopKeyRepeat() {
-    _keyRepeatTimer?.cancel();
-    _keyRepeatTimer = null;
+  // 结束出题模式
+  void _endQuizMode() {
+    setState(() {
+      _isQuizMode = false;
+      _quizWords = [];
+      _showAllAnswers = false;
+      _currentWord = _currentWordList[_currentIndex];
+    });
+  }
+
+  // 打印测试页面
+  Future<void> _printQuizPage() async {
+    final pdf = pw.Document();
+
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        build: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              for (int i = 0; i < _quizWords.length; i += 3)
+                pw.Padding(
+                  padding: const pw.EdgeInsets.only(bottom: 12),
+                  child: pw.Row(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      for (int j = 0; j < 3 && i + j < _quizWords.length; j++)
+                        pw.Expanded(
+                          child: pw.Column(
+                            children: [
+                              // 拼音行
+                              pw.Text(
+                                _words![_quizWords[i + j]]!['pinyin'].join(' '),
+                                style: pw.TextStyle(
+                                  fontSize: 18,
+                                  color: PdfColors.grey,
+                                ),
+                              ),
+                              pw.SizedBox(height: 8),
+                              // 汉字格子行
+                              pw.Row(
+                                mainAxisAlignment: pw.MainAxisAlignment.center,
+                                children: [
+                                  for (int k = 0;
+                                      k < _quizWords[i + j].length;
+                                      k++)
+                                    pw.Container(
+                                      width: 36,
+                                      height: 36,
+                                      margin: const pw.EdgeInsets.symmetric(
+                                          horizontal: 2),
+                                      decoration: pw.BoxDecoration(
+                                        border: pw.Border.all(
+                                          color: PdfColors.grey,
+                                          width: 1.5,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+
+    await Printing.layoutPdf(
+      onLayout: (PdfPageFormat format) async => pdf.save(),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      appBar: AppBar(
+        title: const Text('词语学习'),
+        actions: [
+          if (!_isQuizMode)
+            IconButton(
+              icon: const Icon(Icons.quiz),
+              onPressed: _startQuizMode,
+              tooltip: '开始测试',
+            ),
+          if (_isQuizMode) ...[
+            IconButton(
+              icon: const Icon(Icons.print),
+              onPressed: _printQuizPage,
+              tooltip: '打印',
+            ),
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: _endQuizMode,
+              tooltip: '结束测试',
+            ),
+          ],
+        ],
+      ),
       body: GestureDetector(
         onTap: () {
           _focusNode.requestFocus();
@@ -437,19 +552,23 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
           autofocus: true,
           onKeyEvent: (KeyEvent event) {
             if (event is KeyDownEvent) {
-              if (event.logicalKey == LogicalKeyboardKey.escape) {
-                setState(() {
-                  _isInputMode = !_isInputMode;
-                  if (!_isInputMode) {
-                    _inputPinyin = '';
-                    _currentInputIndex = 0;
-                  }
-                });
-              } else if (_isInputMode) {
-                if (event.logicalKey == LogicalKeyboardKey.backspace &&
-                    !_isBackspacePressed) {
-                  _isBackspacePressed = true;
-                  _startKeyRepeat(() {
+              if (_isQuizMode) {
+                if (event.logicalKey == LogicalKeyboardKey.keyD) {
+                  setState(() {
+                    _showAllAnswers = !_showAllAnswers;
+                  });
+                }
+              } else {
+                if (event.logicalKey == LogicalKeyboardKey.escape) {
+                  setState(() {
+                    _isInputMode = !_isInputMode;
+                    if (!_isInputMode) {
+                      _inputPinyin = '';
+                      _currentInputIndex = 0;
+                    }
+                  });
+                } else if (_isInputMode) {
+                  if (event.logicalKey == LogicalKeyboardKey.backspace) {
                     setState(() {
                       if (_currentInputIndex > 0) {
                         _currentInputIndex--;
@@ -457,188 +576,297 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                             _inputPinyin.substring(0, _currentInputIndex);
                       }
                     });
-                  });
-                } else {
-                  final character = event.character;
-                  if (character != null &&
-                      (RegExp(r'[a-z]').hasMatch(character) ||
-                          RegExp(r'[āáǎàōóǒòēéěèīíǐìūúǔùüǖǘǚǜńňǹḿ]')
-                              .hasMatch(character) ||
-                          character == ' ')) {
-                    if (_currentWord != null && _words != null) {
-                      String fullPinyin =
-                          _words![_currentWord]!['pinyin'].join(' ');
-                      if (_isValidPinyinInput(
-                          character, fullPinyin, _currentInputIndex)) {
-                        setState(() {
-                          _inputPinyin += character;
-                          _currentInputIndex++;
-                        });
+                  } else {
+                    final character = event.character;
+                    if (character != null &&
+                        (RegExp(r'[a-z]').hasMatch(character) ||
+                            RegExp(r'[āáǎàōóǒòēéěèīíǐìūúǔùüǖǘǚǜńňǹḿ]')
+                                .hasMatch(character) ||
+                            character == ' ')) {
+                      if (_currentWord != null && _words != null) {
+                        String fullPinyin =
+                            _words![_currentWord]!['pinyin'].join(' ');
+                        if (_isValidPinyinInput(
+                            character, fullPinyin, _currentInputIndex)) {
+                          setState(() {
+                            _inputPinyin += character;
+                            _currentInputIndex++;
+                          });
+                        }
                       }
                     }
                   }
-                }
-              } else if (!_isInputMode) {
-                // View mode key bindings
-                if (event.logicalKey == LogicalKeyboardKey.space) {
-                  _speakWord();
-                } else if (event.logicalKey == LogicalKeyboardKey.keyP) {
-                  setState(() {
-                    _showPinyin = !_showPinyin;
-                  });
-                } else if (event.logicalKey == LogicalKeyboardKey.keyX) {
-                  setState(() {
-                    _showExplanation = !_showExplanation;
-                  });
-                } else if (event.logicalKey == LogicalKeyboardKey.enter) {
-                  _toggleWordCollection();
-                }
-              }
+                } else if (!_isInputMode) {
+                  if (event.logicalKey == LogicalKeyboardKey.space) {
+                    _speakWord();
+                  } else if (event.logicalKey == LogicalKeyboardKey.keyP) {
+                    setState(() {
+                      if (HardwareKeyboard.instance.isShiftPressed) {
+                        // 大写P：切换保持显示拼音
+                        _keepPinyin = !_keepPinyin;
+                        _showPinyin = _keepPinyin;
+                      } else {
+                        // 小写p：切换当前拼音显示
+                        _showPinyin = !_showPinyin;
+                      }
+                    });
+                  } else if (event.logicalKey == LogicalKeyboardKey.keyX) {
+                    setState(() {
+                      if (HardwareKeyboard.instance.isShiftPressed) {
+                        // 大写X：切换保持显示解释
+                        _keepExplanation = !_keepExplanation;
+                        _showExplanation = _keepExplanation;
+                      } else {
+                        // 小写x：切换当前解释显示
+                        _showExplanation = !_showExplanation;
+                      }
+                    });
+                  } else if (event.logicalKey == LogicalKeyboardKey.enter) {
+                    _toggleWordCollection();
+                  }
 
-              // Common key bindings (work in both modes)
-              if (event.logicalKey == LogicalKeyboardKey.arrowLeft &&
-                  !_isLeftArrowPressed) {
-                _isLeftArrowPressed = true;
-                _startKeyRepeat(() => _navigateWord(-1));
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowRight &&
-                  !_isRightArrowPressed) {
-                _isRightArrowPressed = true;
-                _startKeyRepeat(() => _navigateWord(1));
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
-                  !_isUpArrowPressed) {
-                _isUpArrowPressed = true;
-                _startKeyRepeat(() => _changeFrom(-1));
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowDown &&
-                  !_isDownArrowPressed) {
-                _isDownArrowPressed = true;
-                _startKeyRepeat(() => _changeFrom(1));
-              }
-            } else if (event is KeyUpEvent) {
-              // 处理按键释放
-              if (event.logicalKey == LogicalKeyboardKey.backspace) {
-                _isBackspacePressed = false;
-                _stopKeyRepeat();
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-                _isLeftArrowPressed = false;
-                _stopKeyRepeat();
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-                _isRightArrowPressed = false;
-                _stopKeyRepeat();
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                _isUpArrowPressed = false;
-                _stopKeyRepeat();
-              } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                _isDownArrowPressed = false;
-                _stopKeyRepeat();
+                  if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                    _navigateWord(-1);
+                  } else if (event.logicalKey ==
+                      LogicalKeyboardKey.arrowRight) {
+                    _navigateWord(1);
+                  } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                    _changeFrom(-1);
+                  } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                    _changeFrom(1);
+                  }
+                }
               }
             }
           },
           child: Stack(
             children: [
-              Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    minWidth: 900, // 最小宽度
-                    minHeight: 600, // 最小高度
-                  ),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (_currentWord != null) ...[
-                        SizedBox(
-                          height: 80,
-                          child: Center(
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  _currentWord!,
-                                  style: TextStyle(
-                                    fontSize: 62,
-                                    fontFamily: 'PingFang SC',
-                                    letterSpacing: 2,
-                                    color: _isInputMode
-                                        ? Colors.grey
-                                        : Colors.black,
-                                  ),
-                                ),
-                                if (_savedWords.containsKey(_currentWord))
-                                  const Padding(
-                                    padding: EdgeInsets.only(left: 8),
-                                    child:
-                                        Icon(Icons.star, color: Colors.amber),
-                                  ),
-                              ],
+              if (_isQuizMode)
+                Container(
+                  color: Colors.white,
+                  child: Center(
+                    child: Container(
+                      width: 595, // A4纸宽度（像素）
+                      height: 842, // A4纸高度（像素）
+                      padding: const EdgeInsets.all(20),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: Colors.grey[300]!),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.grey.withOpacity(0.3),
+                            spreadRadius: 2,
+                            blurRadius: 5,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // 试卷内容
+                          Expanded(
+                            child: SingleChildScrollView(
+                              child: Column(
+                                children: [
+                                  for (int i = 0; i < _quizWords.length; i += 3)
+                                    Padding(
+                                      padding:
+                                          const EdgeInsets.only(bottom: 12),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          for (int j = 0;
+                                              j < 3 &&
+                                                  i + j < _quizWords.length;
+                                              j++)
+                                            Expanded(
+                                              child: Column(
+                                                children: [
+                                                  // 拼音行
+                                                  Text(
+                                                    _words![_quizWords[i + j]]![
+                                                            'pinyin']
+                                                        .join(' '),
+                                                    style: const TextStyle(
+                                                      fontSize: 18,
+                                                      color: Colors.grey,
+                                                      height: 1.2,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                  // 汉字格子行
+                                                  Row(
+                                                    mainAxisAlignment:
+                                                        MainAxisAlignment
+                                                            .center,
+                                                    children: [
+                                                      for (int k = 0;
+                                                          k <
+                                                              _quizWords[i + j]
+                                                                  .length;
+                                                          k++)
+                                                        Container(
+                                                          width: 36,
+                                                          height: 36,
+                                                          margin:
+                                                              const EdgeInsets
+                                                                  .symmetric(
+                                                                  horizontal:
+                                                                      2),
+                                                          decoration:
+                                                              BoxDecoration(
+                                                            border: Border.all(
+                                                                color: Colors
+                                                                    .grey[400]!,
+                                                                width: 1.5),
+                                                          ),
+                                                          child: Center(
+                                                            child:
+                                                                _showAllAnswers
+                                                                    ? Text(
+                                                                        _quizWords[i +
+                                                                            j][k],
+                                                                        style:
+                                                                            const TextStyle(
+                                                                          fontSize:
+                                                                              24,
+                                                                          color:
+                                                                              Colors.blue,
+                                                                        ),
+                                                                      )
+                                                                    : null,
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
-                        SizedBox(
-                          height: 60,
-                          child: Center(
-                            child: (_showPinyin || _isInputMode) &&
-                                    _words != null &&
-                                    _currentWord != null
-                                ? Text(
-                                    _isInputMode
-                                        ? _getDisplayPinyin()
-                                        : _words![_currentWord]!['pinyin']
-                                            .join(' '),
-                                    style: const TextStyle(
-                                      fontSize: 36,
-                                      color: Colors.grey,
-                                      fontFamily: 'PingFang SC',
-                                      letterSpacing: 1,
-                                    ),
-                                  )
-                                : null,
-                          ),
-                        ),
-                        SizedBox(
-                          height: 100,
-                          child: Center(
-                            child: _showExplanation &&
-                                    _words != null &&
-                                    _currentWord != null
-                                ? Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 40,
-                                    ),
-                                    child: Text(
-                                      _words![_currentWord]!['explanation'],
-                                      style: const TextStyle(
-                                        fontSize: 26,
-                                        color: Colors.black87,
-                                      ),
-                                      textAlign: TextAlign.center,
-                                    ),
-                                  )
-                                : null,
-                          ),
-                        ),
-                      ] else
-                        const CircularProgressIndicator(),
-                      const SizedBox(height: 40),
-                      if (_currentFrom != null)
-                        Text(
-                          _currentFrom!,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            color: Colors.blue,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                    ],
+                        ],
+                      ),
+                    ),
                   ),
+                )
+              else
+                Stack(
+                  children: [
+                    Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          minWidth: 900,
+                          minHeight: 600,
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (_currentWord != null) ...[
+                              SizedBox(
+                                height: 80,
+                                child: Center(
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Text(
+                                        _currentWord!,
+                                        style: TextStyle(
+                                          fontSize: 62,
+                                          fontFamily: 'PingFang SC',
+                                          letterSpacing: 2,
+                                          color: _isInputMode
+                                              ? Colors.grey
+                                              : Colors.black,
+                                        ),
+                                      ),
+                                      if (_savedWords.containsKey(_currentWord))
+                                        const Padding(
+                                          padding: EdgeInsets.only(left: 8),
+                                          child: Icon(Icons.star,
+                                              color: Colors.amber),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              SizedBox(
+                                height: 60,
+                                child: Center(
+                                  child: (_showPinyin || _isInputMode) &&
+                                          _words != null &&
+                                          _currentWord != null
+                                      ? Text(
+                                          _isInputMode
+                                              ? _getDisplayPinyin()
+                                              : _words![_currentWord]!['pinyin']
+                                                  .join(' '),
+                                          style: const TextStyle(
+                                            fontSize: 36,
+                                            color: Colors.grey,
+                                            fontFamily: 'PingFang SC',
+                                            letterSpacing: 1,
+                                          ),
+                                        )
+                                      : null,
+                                ),
+                              ),
+                              SizedBox(
+                                height: 100,
+                                child: Center(
+                                  child: _showExplanation &&
+                                          _words != null &&
+                                          _currentWord != null
+                                      ? Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 40,
+                                          ),
+                                          child: Text(
+                                            _words![_currentWord]![
+                                                'explanation'],
+                                            style: const TextStyle(
+                                              fontSize: 26,
+                                              color: Colors.black87,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        )
+                                      : null,
+                                ),
+                              ),
+                            ] else
+                              const CircularProgressIndicator(),
+                            const SizedBox(height: 40),
+                            if (_currentFrom != null)
+                              Text(
+                                _currentFrom!,
+                                style: const TextStyle(
+                                  fontSize: 18,
+                                  color: Colors.blue,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      right: 16,
+                      bottom: 16,
+                      child: Text(
+                        '${_currentIndex + 1}/${_currentWordList.length}',
+                        style:
+                            const TextStyle(fontSize: 16, color: Colors.grey),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              Positioned(
-                right: 16,
-                bottom: 16,
-                child: Text(
-                  '${_currentIndex + 1}/${_currentWordList.length}',
-                  style: const TextStyle(fontSize: 16, color: Colors.grey),
-                ),
-              ),
             ],
           ),
         ),
@@ -649,16 +877,22 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
           color: Colors.grey[100],
           border: Border(top: BorderSide(color: Colors.grey[300]!, width: 1)),
         ),
-        child: const Row(
+        child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            Text('ESC键：切换输入模式', style: TextStyle(color: Colors.grey)),
-            Text('空格键：朗读词语', style: TextStyle(color: Colors.grey)),
-            Text('P键：显示/隐藏拼音', style: TextStyle(color: Colors.grey)),
-            Text('X键：显示/隐藏解释', style: TextStyle(color: Colors.grey)),
-            Text('←→键：上一个/下一个', style: TextStyle(color: Colors.grey)),
-            Text('↑↓键：切换年级', style: TextStyle(color: Colors.grey)),
-            Text('回车键：收藏/取消收藏', style: TextStyle(color: Colors.grey)),
+            if (!_isQuizMode) ...[
+              const Text('ESC键：切换输入模式', style: TextStyle(color: Colors.grey)),
+              const Text('空格键：朗读词语', style: TextStyle(color: Colors.grey)),
+              const Text('P键：显示/隐藏拼音', style: TextStyle(color: Colors.grey)),
+              const Text('Shift+P：保持显示拼音',
+                  style: TextStyle(color: Colors.grey)),
+              const Text('X键：显示/隐藏解释', style: TextStyle(color: Colors.grey)),
+              const Text('Shift+X：保持显示解释',
+                  style: TextStyle(color: Colors.grey)),
+              const Text('←→键：上一个/下一个', style: TextStyle(color: Colors.grey)),
+              const Text('↑↓键：切换年级', style: TextStyle(color: Colors.grey)),
+              const Text('回车键：收藏/取消收藏', style: TextStyle(color: Colors.grey)),
+            ],
           ],
         ),
       ),
