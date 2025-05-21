@@ -4,9 +4,19 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'dart:async';
+import 'package:window_manager/window_manager.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 初始化窗口管理器
+  await windowManager.ensureInitialized();
+
+  // 设置窗口最小尺寸
+  await windowManager.setMinimumSize(const Size(900, 600));
+  await windowManager.setSize(const Size(900, 600)); // 设置初始窗口大小
+
   runApp(const MyApp());
 }
 
@@ -20,7 +30,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
-        fontFamily: 'STKaiti', // 设置默认字体
+        fontFamily: 'PingFang SC', // 设置默认字体
       ),
       home: const WordDisplayPage(),
     );
@@ -42,7 +52,7 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   bool _showExplanation = false;
   bool _isInputMode = false;
   String _inputPinyin = '';
-  int _currentInputIndex = 0;  // 当前输入位置
+  int _currentInputIndex = 0; // 当前输入位置
   final FocusNode _focusNode = FocusNode();
   String? _currentFrom;
   List<String> _fromList = [];
@@ -50,6 +60,12 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   List<String> _currentWordList = [];
   final Map<String, int> _fromLastIndex = {}; // 记录每个来源的最后序号
   final FlutterTts _flutterTts = FlutterTts();
+  Timer? _keyRepeatTimer; // 添加定时器用于处理按键重复
+  bool _isBackspacePressed = false; // 记录回退键状态
+  bool _isLeftArrowPressed = false; // 记录左方向键状态
+  bool _isRightArrowPressed = false; // 记录右方向键状态
+  bool _isUpArrowPressed = false; // 记录上方向键状态
+  bool _isDownArrowPressed = false; // 记录下方向键状态
 
   @override
   void initState() {
@@ -60,6 +76,7 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
 
   @override
   void dispose() {
+    _keyRepeatTimer?.cancel();
     _flutterTts.stop();
     _focusNode.dispose();
     super.dispose();
@@ -118,34 +135,33 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
       setState(() {
         _words = json.decode(jsonString);
         // 从所有词语中提取唯一的来源
-        _fromList =
-            _words!.values
-                .map((word) => word['from'] as String)
-                .toSet()
-                .toList()
-              ..sort((a, b) {
-                // 提取年级数字
-                int getGradeNumber(String str) {
-                  final match = RegExp(r'[一二三四五六]').firstMatch(str);
-                  if (match == null) return 999; // 非年级内容放在最后
-                  final gradeMap = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6};
-                  return gradeMap[match.group(0)] ?? 999;
-                }
-                
-                final gradeA = getGradeNumber(a);
-                final gradeB = getGradeNumber(b);
-                
-                if (gradeA != gradeB) {
-                  return gradeA.compareTo(gradeB);
-                }
-                
-                // 如果年级相同，按上下册排序
-                if (a.contains('上册') && b.contains('下册')) return -1;
-                if (a.contains('下册') && b.contains('上册')) return 1;
-                
-                // 如果都不是年级内容，按原字符串排序
-                return a.compareTo(b);
-              });
+        _fromList = _words!.values
+            .map((word) => word['from'] as String)
+            .toSet()
+            .toList()
+          ..sort((a, b) {
+            // 提取年级数字
+            int getGradeNumber(String str) {
+              final match = RegExp(r'[一二三四五六]').firstMatch(str);
+              if (match == null) return 999; // 非年级内容放在最后
+              final gradeMap = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6};
+              return gradeMap[match.group(0)] ?? 999;
+            }
+
+            final gradeA = getGradeNumber(a);
+            final gradeB = getGradeNumber(b);
+
+            if (gradeA != gradeB) {
+              return gradeA.compareTo(gradeB);
+            }
+
+            // 如果年级相同，按上下册排序
+            if (a.contains('上册') && b.contains('下册')) return -1;
+            if (a.contains('下册') && b.contains('上册')) return 1;
+
+            // 如果都不是年级内容，按原字符串排序
+            return a.compareTo(b);
+          });
         debugPrint('来源列表: $_fromList'); // 使用debugPrint替代print
         _loadSavedWords().then((_) {
           // 只有在有收藏词语时才添加收藏选项
@@ -169,18 +185,16 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
       filteredWords = _savedWords.keys.toList();
       if (filteredWords.isEmpty) {
         _currentFrom = _fromList.firstWhere((from) => from != '收藏');
-        filteredWords =
-            _words!.entries
-                .where((entry) => entry.value['from'] == _currentFrom)
-                .map((entry) => entry.key)
-                .toList();
+        filteredWords = _words!.entries
+            .where((entry) => entry.value['from'] == _currentFrom)
+            .map((entry) => entry.key)
+            .toList();
       }
     } else {
-      filteredWords =
-          _words!.entries
-              .where((entry) => entry.value['from'] == _currentFrom)
-              .map((entry) => entry.key)
-              .toList();
+      filteredWords = _words!.entries
+          .where((entry) => entry.value['from'] == _currentFrom)
+          .map((entry) => entry.key)
+          .toList();
     }
 
     if (filteredWords.isEmpty) return;
@@ -198,42 +212,43 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   }
 
   /// 切换词语来源
-  /// 
+  ///
   /// [direction] 方向：1表示向下切换，-1表示向上切换
-  /// 
+  ///
   void _changeFrom(int direction) {
     if (_fromList.isEmpty || _currentFrom == null) return;
     int newIndex = 0;
     // 如果当前来源不在来源列表中，则切换到第一个来源
     if (!_fromList.contains(_currentFrom!)) {
       newIndex = 0;
-    }else{
+    } else {
       final currentIndex = _fromList.indexOf(_currentFrom!);
 
       // 循环计算新索引（支持从列表头跳到尾或从尾跳到头）
-      newIndex = (currentIndex + direction + _fromList.length) % _fromList.length;
+      newIndex =
+          (currentIndex + direction + _fromList.length) % _fromList.length;
     }
 
     // 获取新来源名称
     final newFrom = _fromList[newIndex];
-    
+
     // 第一阶段：立即更新来源显示
     // 这样用户可以立即看到来源已经切换
     setState(() {
       _currentFrom = newFrom;
     });
-    
+
     // 第二阶段：使用延迟确保UI先更新来源显示
     // Duration.zero 意味着这段代码会在当前事件循环结束后立即执行
     // 这确保了先渲染来源变化，再渲染词语变化
     Future.delayed(Duration.zero, () {
       _updateWordListForCurrentFrom();
-      _saveState();  // 保存当前状态到本地存储
+      _saveState(); // 保存当前状态到本地存储
     });
   }
 
   /// 根据当前来源更新词语列表
-  /// 
+  ///
   /// 此方法负责：
   /// 1. 获取当前来源的所有词语
   /// 2. 更新词语列表状态
@@ -243,20 +258,19 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
 
     // 根据来源获取词语列表
     List<String> filteredWords;
-    
+
     // 处理收藏来源的特殊情况
     if (_currentFrom == '收藏') {
       filteredWords = _savedWords.keys.toList();
-      
+
       // 如果收藏为空，切换到非收藏来源
       if (filteredWords.isEmpty) {
         final nonFavoriteFrom = _fromList.firstWhere((from) => from != '收藏');
-        filteredWords =
-            _words!.entries
-                .where((entry) => entry.value['from'] == nonFavoriteFrom)
-                .map((entry) => entry.key)
-                .toList();
-        
+        filteredWords = _words!.entries
+            .where((entry) => entry.value['from'] == nonFavoriteFrom)
+            .map((entry) => entry.key)
+            .toList();
+
         setState(() {
           _currentFrom = nonFavoriteFrom;
           _updateCurrentWordFromList(filteredWords);
@@ -268,12 +282,11 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
       }
     } else {
       // 获取普通来源的词语列表
-      filteredWords =
-          _words!.entries
-              .where((entry) => entry.value['from'] == _currentFrom)
-              .map((entry) => entry.key)
-              .toList();
-      
+      filteredWords = _words!.entries
+          .where((entry) => entry.value['from'] == _currentFrom)
+          .map((entry) => entry.key)
+          .toList();
+
       setState(() {
         _updateCurrentWordFromList(filteredWords);
       });
@@ -281,23 +294,23 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   }
 
   /// 根据词语列表更新当前显示的词语
-  /// 
+  ///
   /// [wordList] 词语列表
   void _updateCurrentWordFromList(List<String> wordList) {
     _currentWordList = wordList;
-    
+
     // 恢复上次浏览位置，如果超出范围则重置为0
     _currentIndex = _fromLastIndex[_currentFrom!] ?? 0;
     if (_currentIndex >= _currentWordList.length) {
       _currentIndex = 0;
     }
-    
+
     // 更新当前词语和拼音
     _currentWord = _currentWordList[_currentIndex];
     if (_currentWord != null && _words != null) {
       // _currentPinyinList = _words![_currentWord]!['pinyin'];
     }
-    
+
     // 重置显示状态
     _showPinyin = false;
     _showExplanation = false;
@@ -307,8 +320,7 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
     if (_currentWordList.isEmpty) return;
 
     setState(() {
-      _currentIndex =
-          (_currentIndex + direction + _currentWordList.length) %
+      _currentIndex = (_currentIndex + direction + _currentWordList.length) %
           _currentWordList.length;
       _currentWord = _currentWordList[_currentIndex];
       _showPinyin = false;
@@ -336,7 +348,7 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
 
   void _toggleWordCollection() {
     if (_currentWord == null) return;
-    
+
     setState(() {
       if (_savedWords.containsKey(_currentWord)) {
         _savedWords.remove(_currentWord);
@@ -363,13 +375,14 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   // 检查输入的字母是否匹配当前拼音位置
   bool _isValidPinyinInput(String input, String fullPinyin, int position) {
     if (position >= fullPinyin.length) return false;
-    
+
     // 获取当前位置的字符
     String currentChar = fullPinyin[position];
-    
+
     // 如果是声调字母，检查不带声调的版本
     if (RegExp(r'[āáǎàōóǒòēéěèīíǐìūúǔùüǖǘǚǜńňǹḿ]').hasMatch(currentChar)) {
-      String baseChar = currentChar.replaceAll(RegExp(r'[āáǎà]'), 'a')
+      String baseChar = currentChar
+          .replaceAll(RegExp(r'[āáǎà]'), 'a')
           .replaceAll(RegExp(r'[ōóǒò]'), 'o')
           .replaceAll(RegExp(r'[ēéěè]'), 'e')
           .replaceAll(RegExp(r'[īíǐì]'), 'i')
@@ -378,20 +391,38 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
           .replaceAll(RegExp(r'[ńňǹḿ]'), 'n');
       return input.toLowerCase() == baseChar.toLowerCase();
     }
-    
+
     return input.toLowerCase() == currentChar.toLowerCase();
   }
 
   // 获取当前应该显示的拼音部分
   String _getDisplayPinyin() {
     if (_currentWord == null || _words == null) return '';
-    
+
     String fullPinyin = _words![_currentWord]!['pinyin'].join(' ');
     if (_currentInputIndex >= fullPinyin.length) return fullPinyin;
-    
+
     // 返回已输入部分和剩余部分的占位符
-    return fullPinyin.substring(0, _currentInputIndex) + 
-           ' ' * (fullPinyin.length - _currentInputIndex);
+    return fullPinyin.substring(0, _currentInputIndex) +
+        ' ' * (fullPinyin.length - _currentInputIndex);
+  }
+
+  // 处理按键重复
+  void _startKeyRepeat(Function() action) {
+    // 立即执行一次
+    action();
+
+    // 设置定时器，每100毫秒重复执行
+    _keyRepeatTimer =
+        Timer.periodic(const Duration(milliseconds: 100), (timer) {
+      action();
+    });
+  }
+
+  // 停止按键重复
+  void _stopKeyRepeat() {
+    _keyRepeatTimer?.cancel();
+    _keyRepeatTimer = null;
   }
 
   @override
@@ -415,22 +446,30 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                   }
                 });
               } else if (_isInputMode) {
-                if (event.logicalKey == LogicalKeyboardKey.backspace) {
-                  setState(() {
-                    if (_currentInputIndex > 0) {
-                      _currentInputIndex--;
-                      _inputPinyin = _inputPinyin.substring(0, _currentInputIndex);
-                    }
+                if (event.logicalKey == LogicalKeyboardKey.backspace &&
+                    !_isBackspacePressed) {
+                  _isBackspacePressed = true;
+                  _startKeyRepeat(() {
+                    setState(() {
+                      if (_currentInputIndex > 0) {
+                        _currentInputIndex--;
+                        _inputPinyin =
+                            _inputPinyin.substring(0, _currentInputIndex);
+                      }
+                    });
                   });
                 } else {
                   final character = event.character;
-                  if (character != null && 
-                      (RegExp(r'[a-z]').hasMatch(character) || 
-                       RegExp(r'[āáǎàōóǒòēéěèīíǐìūúǔùüǖǘǚǜńňǹḿ]').hasMatch(character) ||
-                       character == ' ')) {  // 添加空格支持
+                  if (character != null &&
+                      (RegExp(r'[a-z]').hasMatch(character) ||
+                          RegExp(r'[āáǎàōóǒòēéěèīíǐìūúǔùüǖǘǚǜńňǹḿ]')
+                              .hasMatch(character) ||
+                          character == ' ')) {
                     if (_currentWord != null && _words != null) {
-                      String fullPinyin = _words![_currentWord]!['pinyin'].join(' ');
-                      if (_isValidPinyinInput(character, fullPinyin, _currentInputIndex)) {
+                      String fullPinyin =
+                          _words![_currentWord]!['pinyin'].join(' ');
+                      if (_isValidPinyinInput(
+                          character, fullPinyin, _currentInputIndex)) {
                         setState(() {
                           _inputPinyin += character;
                           _currentInputIndex++;
@@ -455,73 +494,112 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                   _toggleWordCollection();
                 }
               }
-              
+
               // Common key bindings (work in both modes)
-              if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-                _navigateWord(-1);
+              if (event.logicalKey == LogicalKeyboardKey.arrowLeft &&
+                  !_isLeftArrowPressed) {
+                _isLeftArrowPressed = true;
+                _startKeyRepeat(() => _navigateWord(-1));
+              } else if (event.logicalKey == LogicalKeyboardKey.arrowRight &&
+                  !_isRightArrowPressed) {
+                _isRightArrowPressed = true;
+                _startKeyRepeat(() => _navigateWord(1));
+              } else if (event.logicalKey == LogicalKeyboardKey.arrowUp &&
+                  !_isUpArrowPressed) {
+                _isUpArrowPressed = true;
+                _startKeyRepeat(() => _changeFrom(-1));
+              } else if (event.logicalKey == LogicalKeyboardKey.arrowDown &&
+                  !_isDownArrowPressed) {
+                _isDownArrowPressed = true;
+                _startKeyRepeat(() => _changeFrom(1));
+              }
+            } else if (event is KeyUpEvent) {
+              // 处理按键释放
+              if (event.logicalKey == LogicalKeyboardKey.backspace) {
+                _isBackspacePressed = false;
+                _stopKeyRepeat();
+              } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                _isLeftArrowPressed = false;
+                _stopKeyRepeat();
               } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-                _navigateWord(1);
+                _isRightArrowPressed = false;
+                _stopKeyRepeat();
               } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                _changeFrom(-1);
+                _isUpArrowPressed = false;
+                _stopKeyRepeat();
               } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                _changeFrom(1);
+                _isDownArrowPressed = false;
+                _stopKeyRepeat();
               }
             }
           },
           child: Stack(
             children: [
               Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    if (_currentWord != null) ...[
-                      SizedBox(
-                        height: 80,
-                        child: Center(
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                _currentWord!,
-                                style: TextStyle(
-                                  fontSize: 62,
-                                  fontFamily: 'KaiTi',
-                                  letterSpacing: 2,
-                                  color: _isInputMode ? Colors.grey : Colors.black,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    minWidth: 900, // 最小宽度
+                    minHeight: 600, // 最小高度
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (_currentWord != null) ...[
+                        SizedBox(
+                          height: 80,
+                          child: Center(
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _currentWord!,
+                                  style: TextStyle(
+                                    fontSize: 62,
+                                    fontFamily: 'PingFang SC',
+                                    letterSpacing: 2,
+                                    color: _isInputMode
+                                        ? Colors.grey
+                                        : Colors.black,
+                                  ),
                                 ),
-                              ),
-                              if (_savedWords.containsKey(_currentWord))
-                                const Padding(
-                                  padding: EdgeInsets.only(left: 8),
-                                  child: Icon(Icons.star, color: Colors.amber),
-                                ),
-                            ],
+                                if (_savedWords.containsKey(_currentWord))
+                                  const Padding(
+                                    padding: EdgeInsets.only(left: 8),
+                                    child:
+                                        Icon(Icons.star, color: Colors.amber),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                      SizedBox(
-                        height: 60,
-                        child: Center(
-                          child: (_showPinyin || _isInputMode) && 
-                                _words != null && _currentWord != null
-                              ? Text(
-                                _isInputMode ? _getDisplayPinyin() : _words![_currentWord]!['pinyin'].join(' '),
-                                style: const TextStyle(
-                                  fontSize: 36,
-                                  color: Colors.grey,
-                                  fontFamily: 'ZCOOL XiaoWei',
-                                  letterSpacing: 1,
-                                ),
-                              )
-                              : null,
+                        SizedBox(
+                          height: 60,
+                          child: Center(
+                            child: (_showPinyin || _isInputMode) &&
+                                    _words != null &&
+                                    _currentWord != null
+                                ? Text(
+                                    _isInputMode
+                                        ? _getDisplayPinyin()
+                                        : _words![_currentWord]!['pinyin']
+                                            .join(' '),
+                                    style: const TextStyle(
+                                      fontSize: 36,
+                                      color: Colors.grey,
+                                      fontFamily: 'PingFang SC',
+                                      letterSpacing: 1,
+                                    ),
+                                  )
+                                : null,
+                          ),
                         ),
-                      ),
-                      SizedBox(
-                        height: 100,
-                        child: Center(
-                          child:
-                              _showExplanation && _words != null && _currentWord != null
-                                  ? Padding(
+                        SizedBox(
+                          height: 100,
+                          child: Center(
+                            child: _showExplanation &&
+                                    _words != null &&
+                                    _currentWord != null
+                                ? Padding(
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 40,
                                     ),
@@ -534,22 +612,23 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                                       textAlign: TextAlign.center,
                                     ),
                                   )
-                                  : null,
+                                : null,
+                          ),
                         ),
-                      ),
-                    ] else
-                      const CircularProgressIndicator(),
-                    const SizedBox(height: 40),
-                    if (_currentFrom != null)
-                      Text(
-                        _currentFrom!,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          color: Colors.blue,
-                          fontWeight: FontWeight.bold,
+                      ] else
+                        const CircularProgressIndicator(),
+                      const SizedBox(height: 40),
+                      if (_currentFrom != null)
+                        Text(
+                          _currentFrom!,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            color: Colors.blue,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
               Positioned(
@@ -570,16 +649,16 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
           color: Colors.grey[100],
           border: Border(top: BorderSide(color: Colors.grey[300]!, width: 1)),
         ),
-        child: Row(
+        child: const Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            const Text('ESC键：切换输入模式', style: TextStyle(color: Colors.grey)),
-            const Text('空格键：朗读词语', style: TextStyle(color: Colors.grey)),
-            const Text('P键：显示/隐藏拼音', style: TextStyle(color: Colors.grey)),
-            const Text('X键：显示/隐藏解释', style: TextStyle(color: Colors.grey)),
-            const Text('←→键：上一个/下一个', style: TextStyle(color: Colors.grey)),
-            const Text('↑↓键：切换年级', style: TextStyle(color: Colors.grey)),
-            const Text('回车键：收藏/取消收藏', style: TextStyle(color: Colors.grey)),
+            Text('ESC键：切换输入模式', style: TextStyle(color: Colors.grey)),
+            Text('空格键：朗读词语', style: TextStyle(color: Colors.grey)),
+            Text('P键：显示/隐藏拼音', style: TextStyle(color: Colors.grey)),
+            Text('X键：显示/隐藏解释', style: TextStyle(color: Colors.grey)),
+            Text('←→键：上一个/下一个', style: TextStyle(color: Colors.grey)),
+            Text('↑↓键：切换年级', style: TextStyle(color: Colors.grey)),
+            Text('回车键：收藏/取消收藏', style: TextStyle(color: Colors.grey)),
           ],
         ),
       ),
