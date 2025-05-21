@@ -45,3 +45,4 @@ app.*.map.json
 /android/app/release
 macos/Podfile.lock
 .metadata
+pubspec.lock

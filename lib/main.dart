@@ -120,7 +120,30 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                 .map((word) => word['from'] as String)
                 .toSet()
                 .toList()
-              ..sort(); // 按字母顺序排序
+              ..sort((a, b) {
+                // 提取年级数字
+                int getGradeNumber(String str) {
+                  final match = RegExp(r'[一二三四五六]').firstMatch(str);
+                  if (match == null) return 999; // 非年级内容放在最后
+                  final gradeMap = {'一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6};
+                  return gradeMap[match.group(0)] ?? 999;
+                }
+                
+                final gradeA = getGradeNumber(a);
+                final gradeB = getGradeNumber(b);
+                
+                if (gradeA != gradeB) {
+                  return gradeA.compareTo(gradeB);
+                }
+                
+                // 如果年级相同，按上下册排序
+                if (a.contains('上册') && b.contains('下册')) return -1;
+                if (a.contains('下册') && b.contains('上册')) return 1;
+                
+                // 如果都不是年级内容，按原字符串排序
+                return a.compareTo(b);
+              });
+        debugPrint('来源列表: $_fromList'); // 使用debugPrint替代print
         _loadSavedWords().then((_) {
           // 只有在有收藏词语时才添加收藏选项
           if (_savedWords.isNotEmpty) {
