@@ -47,55 +47,6 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
   List<String> _currentWordList = [];
   final Map<String, int> _fromLastIndex = {}; // 记录每个来源的最后序号
   final FlutterTts _flutterTts = FlutterTts();
-  bool _isInputMode = false;
-  String _inputText = '';
-  int _correctCount = 0;
-  String _inputPinyin = '';
-  int _currentPinyinIndex = 0;
-  int _currentCharIndex = 0;
-  List<String> _currentPinyinList = [];
-
-  // 添加拼音映射表
-  final Map<String, String> _pinyinMap = {
-    'ā': 'a',
-    'á': 'a',
-    'ǎ': 'a',
-    'à': 'a',
-    'ō': 'o',
-    'ó': 'o',
-    'ǒ': 'o',
-    'ò': 'o',
-    'ē': 'e',
-    'é': 'e',
-    'ě': 'e',
-    'è': 'e',
-    'ī': 'i',
-    'í': 'i',
-    'ǐ': 'i',
-    'ì': 'i',
-    'ū': 'u',
-    'ú': 'u',
-    'ǔ': 'u',
-    'ù': 'u',
-    'ü': 'v',
-    'ǖ': 'v',
-    'ǘ': 'v',
-    'ǚ': 'v',
-    'ǜ': 'v',
-    'ń': 'n',
-    'ň': 'n',
-    'ǹ': 'n',
-    'ḿ': 'm',
-  };
-
-  // 添加获取普通ASCII拼音的方法
-  String _getPlainPinyin(String pinyin) {
-    String result = pinyin;
-    _pinyinMap.forEach((key, value) {
-      result = result.replaceAll(key, value);
-    });
-    return result;
-  }
 
   @override
   void initState() {
@@ -208,46 +159,135 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
 
     if (filteredWords.isEmpty) return;
 
-    _currentWordList = filteredWords;
-    _currentIndex = _fromLastIndex[_currentFrom!] ?? 0;
-    if (_currentIndex >= _currentWordList.length) {
-      _currentIndex = 0;
-    }
-    _currentWord = _currentWordList[_currentIndex];
-    if (_currentWord != null && _words != null) {
-      _currentPinyinList = _words![_currentWord]!['pinyin'];
-    }
-    setState(() {});
+    setState(() {
+      _currentWordList = filteredWords;
+      _currentIndex = _fromLastIndex[_currentFrom!] ?? 0;
+      if (_currentIndex >= _currentWordList.length) {
+        _currentIndex = 0;
+      }
+      _currentWord = _currentWordList[_currentIndex];
+      _showPinyin = false;
+      _showExplanation = false;
+    });
   }
 
+  /// 切换词语来源
+  /// 
+  /// [direction] 方向：1表示向下切换，-1表示向上切换
+  /// 
+  /// 实现策略：
+  /// 1. 先更新来源显示（立即刷新UI）
+  /// 2. 然后在下一个微任务中更新词语列表和当前词语
+  /// 这种方式确保用户能够立即看到来源变化，然后才看到词语变化
   void _changeFrom(int direction) {
-    if (_fromList.isEmpty) return;
+    // 验证数据有效性
+    if (_fromList.isEmpty || _currentFrom == null) return;
 
-    // 保存当前来源的序号
-    if (_currentFrom != null) {
-      _fromLastIndex[_currentFrom!] = _currentIndex;
-    }
+    // 保存当前来源的最后浏览位置
+    _fromLastIndex[_currentFrom!] = _currentIndex;
 
-    // 获取当前来源的索引
+    // 计算新来源的索引
     final currentIndex = _fromList.indexOf(_currentFrom!);
+    if (currentIndex == -1) return;  // 当前来源不在列表中，退出
 
-    // 计算新索引
-    int newIndex =
-        (currentIndex + direction + _fromList.length) % _fromList.length;
+    // 循环计算新索引（支持从列表头跳到尾或从尾跳到头）
+    int newIndex = (currentIndex + direction + _fromList.length) % _fromList.length;
 
-    // 如果目标来源是收藏，且收藏为空，则跳过
+    // 处理收藏为空的特殊情况
     if (_fromList[newIndex] == '收藏' && _savedWords.isEmpty) {
-      // 继续向前或向后查找下一个非收藏来源
+      // 如果收藏为空，则跳过收藏来源
       while (_fromList[newIndex] == '收藏') {
         newIndex = (newIndex + direction + _fromList.length) % _fromList.length;
       }
     }
 
+    // 获取新来源名称
+    final newFrom = _fromList[newIndex];
+    
+    // 第一阶段：立即更新来源显示
+    // 这样用户可以立即看到来源已经切换
     setState(() {
-      _currentFrom = _fromList[newIndex];
-      _initializeWordList();
+      _currentFrom = newFrom;
     });
-    _saveState();
+    
+    // 第二阶段：使用延迟确保UI先更新来源显示
+    // Duration.zero 意味着这段代码会在当前事件循环结束后立即执行
+    // 这确保了先渲染来源变化，再渲染词语变化
+    Future.delayed(Duration.zero, () {
+      _updateWordListForCurrentFrom();
+      _saveState();  // 保存当前状态到本地存储
+    });
+  }
+
+  /// 根据当前来源更新词语列表
+  /// 
+  /// 此方法负责：
+  /// 1. 获取当前来源的所有词语
+  /// 2. 更新词语列表状态
+  /// 3. 设置当前显示的词语
+  void _updateWordListForCurrentFrom() {
+    if (_words == null || _currentFrom == null) return;
+
+    // 根据来源获取词语列表
+    List<String> filteredWords;
+    
+    // 处理收藏来源的特殊情况
+    if (_currentFrom == '收藏') {
+      filteredWords = _savedWords.keys.toList();
+      
+      // 如果收藏为空，切换到非收藏来源
+      if (filteredWords.isEmpty) {
+        final nonFavoriteFrom = _fromList.firstWhere((from) => from != '收藏');
+        filteredWords =
+            _words!.entries
+                .where((entry) => entry.value['from'] == nonFavoriteFrom)
+                .map((entry) => entry.key)
+                .toList();
+        
+        setState(() {
+          _currentFrom = nonFavoriteFrom;
+          _updateCurrentWordFromList(filteredWords);
+        });
+      } else {
+        setState(() {
+          _updateCurrentWordFromList(filteredWords);
+        });
+      }
+    } else {
+      // 获取普通来源的词语列表
+      filteredWords =
+          _words!.entries
+              .where((entry) => entry.value['from'] == _currentFrom)
+              .map((entry) => entry.key)
+              .toList();
+      
+      setState(() {
+        _updateCurrentWordFromList(filteredWords);
+      });
+    }
+  }
+
+  /// 根据词语列表更新当前显示的词语
+  /// 
+  /// [wordList] 词语列表
+  void _updateCurrentWordFromList(List<String> wordList) {
+    _currentWordList = wordList;
+    
+    // 恢复上次浏览位置，如果超出范围则重置为0
+    _currentIndex = _fromLastIndex[_currentFrom!] ?? 0;
+    if (_currentIndex >= _currentWordList.length) {
+      _currentIndex = 0;
+    }
+    
+    // 更新当前词语和拼音
+    _currentWord = _currentWordList[_currentIndex];
+    if (_currentWord != null && _words != null) {
+      // _currentPinyinList = _words![_currentWord]!['pinyin'];
+    }
+    
+    // 重置显示状态
+    _showPinyin = false;
+    _showExplanation = false;
   }
 
   void _navigateWord(int direction) {
@@ -293,103 +333,24 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
           autofocus: true,
           onKeyEvent: (KeyEvent event) {
             if (event is KeyDownEvent) {
-              if (event.logicalKey == LogicalKeyboardKey.escape) {
+              if (event.logicalKey == LogicalKeyboardKey.space) {
+                _speakWord();
+              } else if (event.logicalKey == LogicalKeyboardKey.keyP) {
                 setState(() {
-                  _isInputMode = !_isInputMode;
-                  if (!_isInputMode) {
-                    _inputText = '';
-                    _inputPinyin = '';
-                    _correctCount = 0;
-                    _currentPinyinIndex = 0;
-                    _currentCharIndex = 0;
-                  }
+                  _showPinyin = !_showPinyin;
                 });
-              } else if (_isInputMode) {
-                if (event.logicalKey == LogicalKeyboardKey.backspace) {
-                  if (_inputPinyin.isNotEmpty) {
-                    setState(() {
-                      if (_currentCharIndex > 0) {
-                        _currentCharIndex--;
-                        _inputPinyin = _inputPinyin.substring(
-                          0,
-                          _inputPinyin.length - 1,
-                        );
-                      } else if (_currentPinyinIndex > 0) {
-                        _currentPinyinIndex--;
-                        _currentCharIndex =
-                            _currentPinyinList[_currentPinyinIndex].length;
-                        _inputPinyin = _inputPinyin.substring(
-                          0,
-                          _inputPinyin.length - 1,
-                        );
-                      }
-                      _inputText = _currentWord!.substring(
-                        0,
-                        _currentPinyinIndex,
-                      );
-                      _correctCount = _inputText.length;
-                    });
-                  }
-                } else if (event.logicalKey == LogicalKeyboardKey.space) {
-                  if (_currentPinyinIndex < _currentPinyinList.length &&
-                      _currentCharIndex ==
-                          _currentPinyinList[_currentPinyinIndex].length) {
-                    setState(() {
-                      _currentPinyinIndex++;
-                      _currentCharIndex = 0;
-                      _inputPinyin += ' ';
-                      _inputText = _currentWord!.substring(
-                        0,
-                        _currentPinyinIndex,
-                      );
-                      _correctCount = _inputText.length;
-                    });
-                  }
-                } else if (event.character != null) {
-                  final char = event.character!.toLowerCase();
-                  if (_currentPinyinIndex < _currentPinyinList.length) {
-                    final currentPinyin =
-                        _currentPinyinList[_currentPinyinIndex];
-                    final plainPinyin = _getPlainPinyin(currentPinyin);
-                    if (_currentCharIndex < plainPinyin.length) {
-                      final nextChar =
-                          plainPinyin[_currentCharIndex].toLowerCase();
-                      if (char == nextChar) {
-                        setState(() {
-                          _inputPinyin += currentPinyin[_currentCharIndex];
-                          _currentCharIndex++;
-                          if (_currentCharIndex == plainPinyin.length) {
-                            _inputText = _currentWord!.substring(
-                              0,
-                              _currentPinyinIndex + 1,
-                            );
-                            _correctCount = _inputText.length;
-                          }
-                        });
-                      }
-                    }
-                  }
-                }
-              } else {
-                if (event.logicalKey == LogicalKeyboardKey.space) {
-                  _speakWord();
-                } else if (event.logicalKey == LogicalKeyboardKey.keyP) {
-                  setState(() {
-                    _showPinyin = !_showPinyin;
-                  });
-                } else if (event.logicalKey == LogicalKeyboardKey.keyX) {
-                  setState(() {
-                    _showExplanation = !_showExplanation;
-                  });
-                } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-                  _navigateWord(-1);
-                } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-                  _navigateWord(1);
-                } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-                  _changeFrom(-1);
-                } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-                  _changeFrom(1);
-                }
+              } else if (event.logicalKey == LogicalKeyboardKey.keyX) {
+                setState(() {
+                  _showExplanation = !_showExplanation;
+                });
+              } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+                _navigateWord(-1);
+              } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+                _navigateWord(1);
+              } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                _changeFrom(-1);
+              } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                _changeFrom(1);
               }
             }
           },
@@ -406,34 +367,14 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              if (_isInputMode) ...[
-                                Text(
-                                  _inputText,
-                                  style: const TextStyle(
-                                    fontSize: 62,
-                                    fontFamily: 'KaiTi',
-                                    letterSpacing: 2,
-                                    color: Colors.blue,
-                                  ),
+                              Text(
+                                _currentWord!,
+                                style: const TextStyle(
+                                  fontSize: 62,
+                                  fontFamily: 'KaiTi',
+                                  letterSpacing: 2,
                                 ),
-                                Text(
-                                  _currentWord!.substring(_inputText.length),
-                                  style: const TextStyle(
-                                    fontSize: 62,
-                                    fontFamily: 'KaiTi',
-                                    letterSpacing: 2,
-                                    color: Colors.grey,
-                                  ),
-                                ),
-                              ] else
-                                Text(
-                                  _currentWord!,
-                                  style: const TextStyle(
-                                    fontSize: 62,
-                                    fontFamily: 'KaiTi',
-                                    letterSpacing: 2,
-                                  ),
-                                ),
+                              ),
                               if (_savedWords.containsKey(_currentWord))
                                 const Padding(
                                   padding: EdgeInsets.only(left: 8),
@@ -447,17 +388,9 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                         height: 60,
                         child: Center(
                           child:
-                              (_showPinyin || _isInputMode) && _words != null
+                              _showPinyin && _words != null && _currentWord != null
                                   ? Text(
-                                    _words![_currentWord]!['pinyin']
-                                        .sublist(
-                                          0,
-                                          _isInputMode
-                                              ? _correctCount
-                                              : _words![_currentWord]!['pinyin']
-                                                  .length,
-                                        )
-                                        .join(' '),
+                                    _words![_currentWord]!['pinyin'].join(' '),
                                     style: const TextStyle(
                                       fontSize: 36,
                                       color: Colors.grey,
@@ -472,7 +405,7 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                         height: 100,
                         child: Center(
                           child:
-                              _showExplanation && _words != null
+                              _showExplanation && _words != null && _currentWord != null
                                   ? Padding(
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 40,
@@ -492,23 +425,13 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
                     ] else
                       const CircularProgressIndicator(),
                     const SizedBox(height: 40),
-                    Text(
-                      _currentFrom!,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        color: Colors.blue,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    if (_isInputMode)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 20),
-                        child: Text(
-                          '输入模式：请输入拼音 ($_inputPinyin)',
-                          style: const TextStyle(
-                            fontSize: 16,
-                            color: Colors.orange,
-                          ),
+                    if (_currentFrom != null)
+                      Text(
+                        _currentFrom!,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          color: Colors.blue,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                   ],
@@ -535,18 +458,11 @@ class _WordDisplayPageState extends State<WordDisplayPage> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
-            Text(
-              'ESC键：${_isInputMode ? "退出输入" : "进入输入"}模式',
-              style: const TextStyle(color: Colors.grey),
-            ),
-            if (!_isInputMode) ...[
-              const Text('空格键：朗读词语', style: TextStyle(color: Colors.grey)),
-              const Text('P键：显示/隐藏拼音', style: TextStyle(color: Colors.grey)),
-              const Text('X键：显示/隐藏解释', style: TextStyle(color: Colors.grey)),
-              const Text('←→键：上一个/下一个', style: TextStyle(color: Colors.grey)),
-              const Text('↑↓键：切换年级', style: TextStyle(color: Colors.grey)),
-            ] else
-              const Text('输入正确拼音显示汉字', style: TextStyle(color: Colors.grey)),
+            const Text('空格键：朗读词语', style: TextStyle(color: Colors.grey)),
+            const Text('P键：显示/隐藏拼音', style: TextStyle(color: Colors.grey)),
+            const Text('X键：显示/隐藏解释', style: TextStyle(color: Colors.grey)),
+            const Text('←→键：上一个/下一个', style: TextStyle(color: Colors.grey)),
+            const Text('↑↓键：切换年级', style: TextStyle(color: Colors.grey)),
           ],
         ),
       ),
